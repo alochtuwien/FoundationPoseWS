@@ -1,0 +1,7 @@
+sensor_msgs/Image img
+string prompt
+int32 width
+int32 height
+---
+bool success
+sensor_msgs/Image mask

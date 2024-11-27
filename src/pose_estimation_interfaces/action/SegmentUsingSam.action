@@ -1,0 +1,16 @@
+# Request
+sensor_msgs/Image img
+string prompt
+int32 width
+int32 height
+float64[9] intrinsics
+float64[5] distortion
+sensor_msgs/Image depth_img
+---
+# Result
+bool success
+geometry_msgs/TransformStamped[] poses
+sensor_msgs/Image[] masks
+---
+# Feedback
+bool done
