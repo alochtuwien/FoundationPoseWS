@@ -1,5 +1,4 @@
-from pose_estimation_interfaces.srv import ExtractSegMapWithPrompt
-from pose_estimation_interfaces.action import SegmentUsingSam
+from pose_estimation_interfaces.action import SegmentUsingSamEstimatePoseUsingFoundation
 from PIL import Image
 from cv_bridge import CvBridge
 from rclpy.action import ActionServer
@@ -42,30 +41,27 @@ from transformers import AutoProcessor, AutoModelForCausalLM
 
 
 
-class Sam2SegmentationActionServer(Node):
+class Sam2SegmentAndEstimatePoseActionServer(Node):
 
     def __init__(self):
         
         super().__init__('sam2_segmentation_action_server')
-        self._action_server = ActionServer(self, SegmentUsingSam, 'segmentation_action_server', self.segment)
-        self.srv = self.create_service(ExtractSegMapWithPrompt, 'SegmentWPrompt', self.segment)
-        self.get_logger().info("Segmentation action servere initialised")
+        
+        self._action_server = ActionServer(self, SegmentUsingSamEstimatePoseUsingFoundation, 'segmentation_and_pose_estimation_action_server', self.segment)
         
         self.scorer = ScorePredictor()
 
         self.refiner = PoseRefinePredictor()
         
-        self.mesh = trimesh.load("/home/ws/src/sam2_service/sam2_service/FoundationPose/010_potted_meat_can/textured_simple.obj")
+        self.mesh = trimesh.load("/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/010_potted_meat_can/textured_simple.obj")
         
         diameter = np.linalg.norm(self.mesh.extents * 2)
-        print(diameter)
         # self.mesh.apply_scale(0.01)
         if diameter > 100: # object is in mm
             self.mesh.apply_scale(0.001)
-        print(diameter)
         glctx = dr.RasterizeCudaContext()
 
-        self.debug_dir = "/home/ws/src/sam2_service/sam2_service/FoundationPose/debug"
+        self.debug_dir = "/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/debug"
         self.est = FoundationPoseMulti(model_pts=self.mesh.vertices, model_normals=self.mesh.vertex_normals, mesh=self.mesh, scorer=self.scorer, refiner=self.refiner, debug_dir=self.debug_dir, debug=0, glctx=glctx)
         
         self.get_logger().info("Pose estimation models loaded")
@@ -74,14 +70,14 @@ class Sam2SegmentationActionServer(Node):
         # Get the image from the request and convert it to a PIL image
         image = Image.frombytes('RGB', (goal_handle.request.width, goal_handle.request.height), goal_handle.request.img.data)
         
-        feedback_msg = SegmentUsingSam.Feedback()
+        feedback_msg = SegmentUsingSamEstimatePoseUsingFoundation.Feedback()
         feedback_msg.done = False
         goal_handle.publish_feedback(feedback_msg)
         text_prompt = goal_handle.request.prompt
 
-        masks, class_names = seg.minimal_open_vocabulary_detection_and_segmentation(image_input=image, text_input=text_prompt)
+        masks, class_names = seg.open_vocabulary_detection_and_segmentation(image_input=image, text_input=text_prompt)
 
-        result = SegmentUsingSam.Result()
+        result = SegmentUsingSamEstimatePoseUsingFoundation.Result()
         
 
         
@@ -118,8 +114,7 @@ class Sam2SegmentationActionServer(Node):
             pose, pose_not_transformed = self.est.register_multi_return_tmp(K=intrinsics, rgb=image, depth=depth_array, ob_mask=mask, iteration=5)
             pose_msg = TransformStamped()
             pose_not_transformed_msg = TransformStamped()
-            pose_not_transformed =pose_not_transformed.cpu().numpy()
-            print(f"Pose not transformed: {pose_not_transformed}")
+            pose_not_transformed = pose_not_transformed.cpu().numpy()
             if image is not None and depth_array is not None and not np.array_equal(pose, np.zeros((4,4))):
                 pose_msg.transform.translation.x = float(pose[0, 3])
                 pose_msg.transform.translation.y = float(pose[1, 3])
@@ -156,7 +151,7 @@ class Sam2SegmentationActionServer(Node):
                 pose_not_transformed_msg.transform.rotation.w = q[3]
                 
                 pose_not_transformed_msg.header = Header()
-                pose_not_transformed_msg.header.stamp = self.get_clock().now().to_msg()
+                pose_not_transformed_msg.header.stamp = goal_handle.request.img.header.stamp
                 pose_not_transformed_msg.header.frame_id = "camera_color_frame"
                 pose_not_transformed_msg.child_frame_id = "object_not_transformed"
 
@@ -183,7 +178,7 @@ def main():
 
     rclpy.init()
     
-    action_serv = Sam2SegmentationActionServer()
+    action_serv = Sam2SegmentAndEstimatePoseActionServer()
 
     rclpy.spin(action_serv)
 

@@ -1,6 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "pose_estimation_interfaces/srv/extract_seg_map_with_prompt.hpp"
-#include "pose_estimation_interfaces/action/segment_using_sam.hpp"
+#include "pose_estimation_interfaces/action/segment_using_sam_estimate_pose_using_foundation.hpp"
 #include "pose_estimation_interfaces/msg/track_it_msg.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
@@ -43,10 +43,9 @@ public:
   PipelineExecutionNode()
   : Node("pose_estimation_pipeline")
   {
-    client_ = this->create_client<pose_estimation_interfaces::srv::ExtractSegMapWithPrompt>("SegmentWPrompt");
-    this->client_ptr_ = rclcpp_action::create_client<pose_estimation_interfaces::action::SegmentUsingSam>(
+    this->client_ptr_ = rclcpp_action::create_client<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>(
       this,
-      "segmentation_action_server");
+      "segmentation_and_pose_estimation_action_server");
 
     image_sub = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(this, "/camera/camera/color/image_raw", rmw_qos_profile_latch);
     depth_sub = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(this, "/camera/camera/aligned_depth_to_color/image_raw", rmw_qos_profile_default);
@@ -65,12 +64,10 @@ public:
   }
 
 private:
-  rclcpp_action::Client<pose_estimation_interfaces::action::SegmentUsingSam>::SharedPtr client_ptr_;
+  rclcpp_action::Client<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::SharedPtr client_ptr_;
   // rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
   // camera info subscriber
   // rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_subscription_;
-  rclcpp::Client<pose_estimation_interfaces::srv::ExtractSegMapWithPrompt>::SharedPtr client_;
-  // Create publisher for the segmentation map
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr segmentation_map_publisher_;
   // Create publisher for the tf
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -99,7 +96,7 @@ private:
   // current segmentation maps
   std::vector<sensor_msgs::msg::Image> _segmentation_maps;
   // add handle to the segmentation goal
-  rclcpp_action::ClientGoalHandle<pose_estimation_interfaces::action::SegmentUsingSam>::SharedPtr goal_handle_;
+  rclcpp_action::ClientGoalHandle<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::SharedPtr goal_handle_;
 
   void runtime_loop(const sensor_msgs::msg::Image::SharedPtr msg,
                     const sensor_msgs::msg::Image::SharedPtr depth_msg,
@@ -139,11 +136,11 @@ private:
     if (!_segmentation_started){
       buffor_msgs.clear();
       _segmentation_started = true;
-      auto goal = pose_estimation_interfaces::action::SegmentUsingSam::Goal();
+      auto goal = pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation::Goal();
       goal.img = *msg;
       goal.height = msg->height;
       goal.width = msg->width;
-      goal.prompt = "Please provide the segmentation map of the black clamp with the orange tip visible on the image";
+      goal.prompt = "Spam ham can";
 
       // get the camera intrinsics
       std::array<double, 9> intrinsics;
@@ -160,7 +157,7 @@ private:
 
       goal.depth_img = *depth_msg;
 
-      auto send_goal_options = rclcpp_action::Client<pose_estimation_interfaces::action::SegmentUsingSam>::SendGoalOptions();
+      auto send_goal_options = rclcpp_action::Client<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::SendGoalOptions();
       send_goal_options.result_callback = std::bind(&PipelineExecutionNode::result_callback, this, _1);
 
       this->client_ptr_->async_send_goal(goal, send_goal_options);
@@ -170,7 +167,7 @@ private:
   }
 
 
-  void result_callback(const rclcpp_action::ClientGoalHandle<pose_estimation_interfaces::action::SegmentUsingSam>::WrappedResult & result){
+  void result_callback(const rclcpp_action::ClientGoalHandle<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::WrappedResult & result){
     RCLCPP_INFO(this->get_logger(), "Result received");
     if (result.code == rclcpp_action::ResultCode::SUCCEEDED){
       RCLCPP_INFO(this->get_logger(), "Segmentation succeeded");

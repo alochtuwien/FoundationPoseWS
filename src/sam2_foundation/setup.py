@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'sam2_service'
+package_name = 'sam2_foundation'
 
 setup(
     name=package_name,
@@ -20,8 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'service = sam2_service.segmentation_service:main',
-            'action = sam2_service.segmentation_action:main',
+            'service = sam2_foundation.segmentation_service:main',
+            'action = sam2_foundation.segmentation_action:main',
         ],
     },
 )

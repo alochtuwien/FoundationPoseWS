@@ -29,7 +29,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ExtractSegMapWithPrompt.srv"
-  "action/SegmentUsingSam.action"
+  "action/SegmentUsingSamEstimatePoseUsingFoundation.action"
   "msg/TrackItMsg.msg"
   DEPENDENCIES geometry_msgs sensor_msgs # Add packages that above messages depend on, in this case geometry_msgs for Sphere.msg
 )

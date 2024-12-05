@@ -36,8 +36,9 @@ import message_filters
 from transformers import AutoProcessor, AutoModelForCausalLM 
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
+import time
 
-class Sam2SegmentationService(Node):
+class Foundation_Tracking_Subcriber(Node):
 
     def __init__(self):
         
@@ -47,7 +48,7 @@ class Sam2SegmentationService(Node):
 
         self.refiner = PoseRefinePredictor()
         
-        self.mesh = trimesh.load("/home/ws/src/sam2_service/sam2_service/FoundationPose/010_potted_meat_can/textured_simple.obj")
+        self.mesh = trimesh.load("/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/010_potted_meat_can/textured_simple.obj")
         
         diameter = np.linalg.norm(self.mesh.extents * 2)
         print(diameter)
@@ -57,12 +58,16 @@ class Sam2SegmentationService(Node):
         print(diameter)
         glctx = dr.RasterizeCudaContext()
 
-        self.debug_dir = "/home/ws/src/sam2_service/sam2_service/FoundationPose/debug"
+        self.debug_dir = "/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/debug"
         self.est = FoundationPoseMulti(model_pts=self.mesh.vertices, model_normals=self.mesh.vertex_normals, mesh=self.mesh, scorer=self.scorer, refiner=self.refiner, debug_dir=self.debug_dir, debug=0, glctx=glctx)
         self.get_logger().info("Segmentation service initialised")
         self.initial_pose = None
         self.tf_broadcaster = TransformBroadcaster(self)
         torch.autocast(device_type="cuda", dtype=torch.float).__enter__()
+        self.done = False
+        self.new_frame = False
+        self.intrinsics = None
+        self.frame_timestamp = None
 
     def track(self, msg):
         print("Segmentation service called")
@@ -88,28 +93,31 @@ class Sam2SegmentationService(Node):
             
             
 
-        
+        self.frame_timestamp = msg.img.header.stamp
         image = Image.frombytes('RGB', (msg.img.width, msg.img.height), msg.img.data)
         initial_pose = msg.initial_pose  
         image = np.array(image)
         intrinsics = msg.intrinsics
-        intrinsics = np.array(intrinsics.data).reshape((3, 3))
+        self.intrinsics = np.array(intrinsics.data).reshape((3, 3))
         
         depth_array = np.array(CvBridge().imgmsg_to_cv2(msg.depth_img, desired_encoding="passthrough"))
         
 
         depth_array = np.array(depth_array, dtype=np.float32)
-        image = np.array(image, dtype=np.float32)
+        self.image = np.array(image, dtype=np.float32)
         
-        # scale the depth image to meters
-        depth_array = depth_array / 1000.0
-        import time
+        self.depth_array = depth_array / 1000.0
+        self.new_frame = True
+
+
+        
+    def track_spinner(self):
         start = time.time()
-        pose = self.est.track_one_multi(rgb=image, depth=depth_array, K=intrinsics, iteration=10, ob_id=0)
-        print("Time taken: ", time.time() - start)
+        pose = self.est.track_one_multi(rgb=self.image, depth=self.depth_array, K=self.intrinsics, iteration=10, ob_id=0)
+        print(f"Time taken to track: {time.time() - start}")
         pose_msg = TransformStamped()
         pose_msg.header = Header()
-        pose_msg.header.stamp = self.get_clock().now().to_msg()
+        pose_msg.header.stamp = self.frame_timestamp
         pose_msg.header.frame_id = "camera_color_frame"
         pose_msg.child_frame_id = "object_tracked"
         
@@ -123,20 +131,22 @@ class Sam2SegmentationService(Node):
         pose_msg.transform.rotation.y = q[1]
         pose_msg.transform.rotation.z = q[2]
         pose_msg.transform.rotation.w = q[3]
-        
         self.tf_broadcaster.sendTransform(pose_msg)
             
             
-        print("Tracking step")
-
 
 def main():
 
     rclpy.init()
     
-    seg_service = Sam2SegmentationService()
-
-    rclpy.spin(seg_service)
+    seg_service = Foundation_Tracking_Subcriber()
+    while rclpy.ok():
+        rclpy.spin_once(seg_service)
+        if seg_service.new_frame:
+            seg_service.track_spinner()
+            seg_service.new_frame = False
+        else:
+            time.sleep(0.005)
 
     rclpy.shutdown()
 
