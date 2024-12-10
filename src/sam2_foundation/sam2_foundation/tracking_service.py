@@ -38,6 +38,16 @@ from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 import time
 
+"""
+This script defines a ROS2 node node that subscribes to a topic for pose tracking using an initial object pose and depth image data.
+It provides real-time tracking of a 3D object, leveraging depth data and mesh-based pose estimation.
+1. The node subscribes to a topic for pose tracking.
+2. The node receives an initial object pose and depth image data.
+3. The node tracks the object in the image data
+4. The node publishes the object pose.
+
+"""
+
 class Foundation_Tracking_Subcriber(Node):
 
     def __init__(self):
@@ -48,14 +58,17 @@ class Foundation_Tracking_Subcriber(Node):
 
         self.refiner = PoseRefinePredictor()
         
-        self.mesh = trimesh.load("/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/010_potted_meat_can/textured_simple.obj")
+        self.mesh = trimesh.load("/home/hoanghuy/master_thesis/FoundationPose/data_real/mesh/LegoBlock.stl")
+        self.to_origin, extents = trimesh.bounds.oriented_bounds(self.mesh)
+
+        self.bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
         
         diameter = np.linalg.norm(self.mesh.extents * 2)
-        print(diameter)
+        # print(diameter)
         # self.mesh.apply_scale(0.01)
         if diameter > 100: # object is in mm
             self.mesh.apply_scale(0.001)
-        print(diameter)
+        # print(diameter)
         glctx = dr.RasterizeCudaContext()
 
         self.debug_dir = "/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/debug"
@@ -68,10 +81,11 @@ class Foundation_Tracking_Subcriber(Node):
         self.new_frame = False
         self.intrinsics = None
         self.frame_timestamp = None
+        self.bridge = CvBridge()
 
     def track(self, msg):
         print("Segmentation service called")
-        if self.initial_pose is None:
+        if self.initial_pose is None or msg.reset_tracking:
             translation = np.array([0.0, 0.0, 0.0])
             rotation = np.array([0.0, 0.0, 0.0, 1.0])
             translation[0] = msg.initial_pose.transform.translation.x
@@ -91,10 +105,8 @@ class Foundation_Tracking_Subcriber(Node):
             self.est.pose_last[0] = torch.from_numpy(self.initial_pose).float().cuda()
             
             
-            
-
         self.frame_timestamp = msg.img.header.stamp
-        image = Image.frombytes('RGB', (msg.img.width, msg.img.height), msg.img.data)
+        image = self.bridge.imgmsg_to_cv2(msg.img, 'bgr8')#Image.frombytes('RGB', (msg.img.width, msg.img.height), msg.img.data)
         initial_pose = msg.initial_pose  
         image = np.array(image)
         intrinsics = msg.intrinsics
@@ -115,6 +127,13 @@ class Foundation_Tracking_Subcriber(Node):
         start = time.time()
         pose = self.est.track_one_multi(rgb=self.image, depth=self.depth_array, K=self.intrinsics, iteration=10, ob_id=0)
         print(f"Time taken to track: {time.time() - start}")
+        
+        center_pose = pose@np.linalg.inv(self.to_origin)
+        vis = draw_posed_3d_box(self.intrinsics, img=self.image, ob_in_cam=center_pose, bbox=self.bbox)
+        vis = draw_xyz_axis(vis, ob_in_cam=center_pose, scale=0.1, K=self.intrinsics, thickness=2, transparency=0, is_input_rgb=True)
+        cv2.imshow('Result', vis) 
+        cv2.waitKey(1)
+        
         pose_msg = TransformStamped()
         pose_msg.header = Header()
         pose_msg.header.stamp = self.frame_timestamp

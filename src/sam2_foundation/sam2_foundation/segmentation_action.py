@@ -7,15 +7,16 @@ from rclpy.action import ActionServer
 import rclpy
 from rclpy.node import Node
 import os, sys
-current_dir = os.path.dirname(os.path.abspath(__file__))
-segmentation_dir = os.path.join(current_dir, 'segmentation')
-sys.path.append(segmentation_dir)
-
-import segmentation_foundationpose as seg
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 segmentation_dir = os.path.join(current_dir, 'FoundationPose')
 sys.path.append(segmentation_dir)
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+segmentation_dir = os.path.join(current_dir, 'FoundationPose', "segmentation")
+sys.path.append(segmentation_dir)
+
+import segmentation_foundationpose as seg
 
 from estimater import *
 from datareader import *
@@ -29,16 +30,18 @@ from cv_bridge import CvBridge, CvBridgeError
 import cv2
 import numpy as np
 from PIL import Image
-import threading
-import multiprocessing
-from copy import deepcopy
-from scipy.optimize import minimize
-import message_filters
-# from transformers import Owlv2Processor, Owlv2ForObjectDetection
-from transformers import AutoProcessor, AutoModelForCausalLM 
 
-# Add the segmentation folder to the Python path
 
+"""
+This script is the action server for the segmentation and pose estimation of objects using the SAM2 model and the FoundationPose model.
+1. The action server receives an image and a prompt from the client.
+2. The action server segments the object in the image using the Florence2 +SAM2 model from the segmentation folder.
+3. The action server estimates the pose of the object using the FoundationPose model from the FoundationPose folder.
+4. The action server returns the segmentation masks and the poses of the object.
+5. The action server publishes feedback to the client.
+6. The action server sends a result to the client.
+7. The action server succeeds.
+"""
 
 
 class Sam2SegmentAndEstimatePoseActionServer(Node):
@@ -53,7 +56,7 @@ class Sam2SegmentAndEstimatePoseActionServer(Node):
 
         self.refiner = PoseRefinePredictor()
         
-        self.mesh = trimesh.load("/home/ws/src/sam2_foundation/sam2_foundation/FoundationPose/010_potted_meat_can/textured_simple.obj")
+        self.mesh = trimesh.load("/home/hoanghuy/master_thesis/FoundationPose/data_real/mesh/LegoBlock.stl")
         
         diameter = np.linalg.norm(self.mesh.extents * 2)
         # self.mesh.apply_scale(0.01)
@@ -78,10 +81,6 @@ class Sam2SegmentAndEstimatePoseActionServer(Node):
         masks, class_names = seg.open_vocabulary_detection_and_segmentation(image_input=image, text_input=text_prompt)
 
         result = SegmentUsingSamEstimatePoseUsingFoundation.Result()
-        
-
-        
-        
         
         if len(masks) == 0:
             result.success = True
@@ -155,8 +154,6 @@ class Sam2SegmentAndEstimatePoseActionServer(Node):
                 pose_not_transformed_msg.header.frame_id = "camera_color_frame"
                 pose_not_transformed_msg.child_frame_id = "object_not_transformed"
 
-                
-                
                 
                 
         masks = [CvBridge().cv2_to_imgmsg(mask) for mask in masks]

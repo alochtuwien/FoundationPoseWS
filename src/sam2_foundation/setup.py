@@ -20,8 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'service = sam2_foundation.segmentation_service:main',
-            'action = sam2_foundation.segmentation_action:main',
+            'tracking_service = sam2_foundation.tracking_service:main',
+            'segmentation_pose_estimation_action_server = sam2_foundation.segmentation_action:main',
         ],
     },
 )

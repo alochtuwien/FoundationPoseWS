@@ -123,11 +123,21 @@ private:
       msg_to_track.img = *msg;
       msg_to_track.depth_img = *depth_msg;
       msg_to_track.initial_pose = last_transformStamped_not_transformed;
+      msg_to_track.reset_tracking = false;
+
+      if (buffor_msgs.size() > 0){
+        buffor_msgs.front().reset_tracking = true;
+      }
+      else
+      {
+        msg_to_track.reset_tracking = true;
+      }
 
       for (auto &msg_from_buffor : buffor_msgs){
         msg_from_buffor.initial_pose = last_transformStamped_not_transformed;
         track_it_publisher_->publish(msg_from_buffor);
       }
+    
 
       track_it_publisher_->publish(msg_to_track);
       buffor_msgs.clear();
@@ -140,7 +150,7 @@ private:
       goal.img = *msg;
       goal.height = msg->height;
       goal.width = msg->width;
-      goal.prompt = "Spam ham can";
+      goal.prompt = "Blocks";
 
       // get the camera intrinsics
       std::array<double, 9> intrinsics;
@@ -163,6 +173,26 @@ private:
       this->client_ptr_->async_send_goal(goal, send_goal_options);
 
     }
+    auto msg_to_track = pose_estimation_interfaces::msg::TrackItMsg();
+    std::array<double, 9> _intrinsics;
+    std::array<double, 5> _distortion;
+
+    for (int i = 0; i < 9; i++){
+      _intrinsics[i] = camera_info_msg->k[i];
+    }
+    for (int i = 0; i < 5; i++){
+      _distortion[i] = camera_info_msg->d[i];
+    }
+
+    msg_to_track.intrinsics = _intrinsics;
+    msg_to_track.distortion = _distortion;
+    msg_to_track.img = *msg;
+    msg_to_track.depth_img = *depth_msg;
+    msg_to_track.initial_pose = last_transformStamped_not_transformed;
+    msg_to_track.reset_tracking = false;
+
+    buffor_msgs.push_back(msg_to_track);
+
     
   }
 
