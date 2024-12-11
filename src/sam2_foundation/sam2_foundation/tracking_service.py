@@ -1,4 +1,5 @@
 from pose_estimation_interfaces.msg import TrackItMsg
+from pose_estimation_interfaces.msg import ResetTracking
 from PIL import Image
 from cv_bridge import CvBridge
 from rclpy.action import ActionServer
@@ -54,6 +55,9 @@ class Foundation_Tracking_Subcriber(Node):
         
         super().__init__('pose_tracking_service')
         self.subscription = self.create_subscription(TrackItMsg, 'track_it', self.track, 10)
+        self.reset_service = self.create_subscription(ResetTracking, 'reset_tracking', self.reset, 10)
+        
+        
         self.scorer = ScorePredictor()
 
         self.refiner = PoseRefinePredictor()
@@ -81,11 +85,22 @@ class Foundation_Tracking_Subcriber(Node):
         self.new_frame = False
         self.intrinsics = None
         self.frame_timestamp = None
+        self.waiting_for_new = True
         self.bridge = CvBridge()
 
+    def reset(self, msg):
+        print("restarted tracking")
+        self.initial_pose = None
+        self.waiting_for_new = True
+        self.new_msg = True
+        self.subscription = self.destroy_subscription(self.subscription)
+        topic_name = msg.topic_name
+        self.subscription = self.create_subscription(TrackItMsg, topic_name, self.track, 10)
+
     def track(self, msg):
-        print("Segmentation service called")
-        if self.initial_pose is None or msg.reset_tracking:
+        if self.waiting_for_new:
+            
+            print("Resetting tracking")
             translation = np.array([0.0, 0.0, 0.0])
             rotation = np.array([0.0, 0.0, 0.0, 1.0])
             translation[0] = msg.initial_pose.transform.translation.x
@@ -103,24 +118,27 @@ class Foundation_Tracking_Subcriber(Node):
             self.initial_pose[:3, :3] = rotation_matrix
             self.initial_pose[:3, 3] = translation
             self.est.pose_last[0] = torch.from_numpy(self.initial_pose).float().cuda()
+            self.waiting_for_new = False
             
+        if not self.waiting_for_new: 
+            print("Tracking")
+            self.frame_timestamp = msg.img.header.stamp
+            image = self.bridge.imgmsg_to_cv2(msg.img, 'bgr8')#Image.frombytes('RGB', (msg.img.width, msg.img.height), msg.img.data)
+            initial_pose = msg.initial_pose  
+            image = np.array(image)
+            intrinsics = msg.intrinsics
+            self.intrinsics = np.array(intrinsics.data).reshape((3, 3))
             
-        self.frame_timestamp = msg.img.header.stamp
-        image = self.bridge.imgmsg_to_cv2(msg.img, 'bgr8')#Image.frombytes('RGB', (msg.img.width, msg.img.height), msg.img.data)
-        initial_pose = msg.initial_pose  
-        image = np.array(image)
-        intrinsics = msg.intrinsics
-        self.intrinsics = np.array(intrinsics.data).reshape((3, 3))
-        
-        depth_array = np.array(CvBridge().imgmsg_to_cv2(msg.depth_img, desired_encoding="passthrough"))
-        
+            depth_array = np.array(CvBridge().imgmsg_to_cv2(msg.depth_img, desired_encoding="passthrough"))
+            
 
-        depth_array = np.array(depth_array, dtype=np.float32)
-        self.image = np.array(image, dtype=np.float32)
-        
-        self.depth_array = depth_array / 1000.0
-        self.new_frame = True
-
+            depth_array = np.array(depth_array, dtype=np.float32)
+            self.image = np.array(image, dtype=np.float32)
+            
+            self.depth_array = depth_array / 1000.0
+            self.new_frame = True
+        else:
+            self.new_frame = False
 
         
     def track_spinner(self):
@@ -161,11 +179,12 @@ def main():
     seg_service = Foundation_Tracking_Subcriber()
     while rclpy.ok():
         rclpy.spin_once(seg_service)
-        if seg_service.new_frame:
-            seg_service.track_spinner()
-            seg_service.new_frame = False
-        else:
-            time.sleep(0.005)
+        if not seg_service.waiting_for_new:
+            if seg_service.new_frame:
+                seg_service.track_spinner()
+                seg_service.new_frame = False
+            else:
+                time.sleep(0.0001)
 
     rclpy.shutdown()
 

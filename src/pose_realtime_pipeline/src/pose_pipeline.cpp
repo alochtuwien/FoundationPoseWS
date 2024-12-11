@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "pose_estimation_interfaces/srv/extract_seg_map_with_prompt.hpp"
 #include "pose_estimation_interfaces/action/segment_using_sam_estimate_pose_using_foundation.hpp"
+#include "pose_estimation_interfaces/msg/reset_tracking.hpp"
 #include "pose_estimation_interfaces/msg/track_it_msg.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
@@ -60,6 +61,7 @@ public:
 
     track_it_publisher_ = this->create_publisher<pose_estimation_interfaces::msg::TrackItMsg>("/track_it", 10);   
     
+    reset_tracking_publisher_ = this->create_publisher<pose_estimation_interfaces::msg::ResetTracking>("/reset_tracking", 10);
 
   }
 
@@ -80,6 +82,8 @@ private:
   geometry_msgs::msg::TransformStamped last_transformStamped_not_transformed;
   // create publisher for TrackItMsg
   rclcpp::Publisher<pose_estimation_interfaces::msg::TrackItMsg>::SharedPtr track_it_publisher_;
+  // create client for reset tracking service
+  rclcpp::Publisher<pose_estimation_interfaces::msg::ResetTracking>::SharedPtr reset_tracking_publisher_;
 
 
   bool _segmentation_started = false;
@@ -87,6 +91,12 @@ private:
   bool _intrinsics_acquired = false;
   bool _tracking_started = false;
   bool _new_pose_estimation_available = false;
+  bool _acquiring_buffer = false;
+  bool _segmentation_requested = true;
+  uint _id = 0;
+
+  // segmentation request time stamp
+  std::time_t _segmentation_last_request_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());  
 
   std::vector<pose_estimation_interfaces::msg::TrackItMsg> buffor_msgs;
   
@@ -101,78 +111,10 @@ private:
   void runtime_loop(const sensor_msgs::msg::Image::SharedPtr msg,
                     const sensor_msgs::msg::Image::SharedPtr depth_msg,
                     const sensor_msgs::msg::CameraInfo::SharedPtr camera_info_msg){
-    std::uint64_t header_info_sec = msg->header.stamp.sec;
-    std::uint64_t header_info_nsec = msg->header.stamp.nanosec/1e6;
-    std::cout << "Received image with timestamp " << header_info_sec << "," << header_info_nsec << std::endl;
-    if ((_new_pose_estimation_available && !_tracking_started) || _tracking_started){
+    // std::uint64_t header_info_sec = msg->header.stamp.sec;
+    // std::uint64_t header_info_nsec = msg->header.stamp.nanosec/1e6;
+    // std::cout << "Received image with timestamp " << header_info_sec << "," << header_info_nsec << std::endl;
 
-      _tracking_started = true;
-      auto msg_to_track = pose_estimation_interfaces::msg::TrackItMsg();
-      std::array<double, 9> _intrinsics;
-      std::array<double, 5> _distortion;
-
-      for (int i = 0; i < 9; i++){
-        _intrinsics[i] = camera_info_msg->k[i];
-      }
-      for (int i = 0; i < 5; i++){
-        _distortion[i] = camera_info_msg->d[i];
-      }
-
-      msg_to_track.intrinsics = _intrinsics;
-      msg_to_track.distortion = _distortion;
-      msg_to_track.img = *msg;
-      msg_to_track.depth_img = *depth_msg;
-      msg_to_track.initial_pose = last_transformStamped_not_transformed;
-      msg_to_track.reset_tracking = false;
-
-      if (buffor_msgs.size() > 0){
-        buffor_msgs.front().reset_tracking = true;
-      }
-      else
-      {
-        msg_to_track.reset_tracking = true;
-      }
-
-      for (auto &msg_from_buffor : buffor_msgs){
-        msg_from_buffor.initial_pose = last_transformStamped_not_transformed;
-        track_it_publisher_->publish(msg_from_buffor);
-      }
-    
-
-      track_it_publisher_->publish(msg_to_track);
-      buffor_msgs.clear();
-    }
-
-    if (!_segmentation_started){
-      buffor_msgs.clear();
-      _segmentation_started = true;
-      auto goal = pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation::Goal();
-      goal.img = *msg;
-      goal.height = msg->height;
-      goal.width = msg->width;
-      goal.prompt = "Blocks";
-
-      // get the camera intrinsics
-      std::array<double, 9> intrinsics;
-      std::array<double, 5> distortion;
-
-      for (int i = 0; i < 9; i++){
-        intrinsics[i] = camera_info_msg->k[i];
-      }
-      for (int i = 0; i < 5; i++){
-        distortion[i] = camera_info_msg->d[i];
-      }
-      goal.intrinsics = intrinsics;
-      goal.distortion = distortion;
-
-      goal.depth_img = *depth_msg;
-
-      auto send_goal_options = rclcpp_action::Client<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::SendGoalOptions();
-      send_goal_options.result_callback = std::bind(&PipelineExecutionNode::result_callback, this, _1);
-
-      this->client_ptr_->async_send_goal(goal, send_goal_options);
-
-    }
     auto msg_to_track = pose_estimation_interfaces::msg::TrackItMsg();
     std::array<double, 9> _intrinsics;
     std::array<double, 5> _distortion;
@@ -191,16 +133,95 @@ private:
     msg_to_track.initial_pose = last_transformStamped_not_transformed;
     msg_to_track.reset_tracking = false;
 
-    buffor_msgs.push_back(msg_to_track);
+    if (_tracking_started){
+      track_it_publisher_->publish(msg_to_track);
+    }
 
-    
+    if ((_new_pose_estimation_available)){
+
+      _tracking_started = true;
+      _new_pose_estimation_available = false;
+
+      if (buffor_msgs.size() > 0){
+        buffor_msgs.front().reset_tracking = true;
+      }
+      else
+      {
+        msg_to_track.reset_tracking = true;
+      }
+
+      // publish reset tracking message
+      auto msg_reset_tracking = pose_estimation_interfaces::msg::ResetTracking();
+      msg_reset_tracking.reset = true;
+      // generate _id
+      _id += 1;
+      msg_reset_tracking.topic_name = "/track_it" + std::to_string(_id);
+      // msg_reset_tracking.topic_name = "/track_it";
+      reset_tracking_publisher_->publish(msg_reset_tracking);
+
+      track_it_publisher_ = this->create_publisher<pose_estimation_interfaces::msg::TrackItMsg>(msg_reset_tracking.topic_name, 10);
+
+      for (auto &msg_from_buffor : buffor_msgs){
+        if (msg_from_buffor.reset_tracking){
+          RCLCPP_INFO(this->get_logger(), "Uploading new pose estimation to the buffer");
+        }
+        msg_from_buffor.initial_pose = last_transformStamped_not_transformed;
+        track_it_publisher_->publish(msg_from_buffor);
+      }
+      _acquiring_buffer = false;
+      track_it_publisher_->publish(msg_to_track);
+      buffor_msgs.clear();
+      RCLCPP_INFO(this->get_logger(), "Tracking restarted");
+    }
+
+
+
+
+    if (!_segmentation_started && _segmentation_requested){
+      buffor_msgs.clear();
+      _segmentation_requested = false;
+      _segmentation_started = true;
+      _acquiring_buffer = true;
+      auto goal = pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation::Goal();
+      goal.img = *msg;
+      goal.height = msg->height;
+      goal.width = msg->width;
+      goal.prompt = "Blocks";
+
+     
+      goal.intrinsics = _intrinsics;
+      goal.distortion = _distortion;
+
+      goal.depth_img = *depth_msg;
+
+      auto send_goal_options = rclcpp_action::Client<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::SendGoalOptions();
+      send_goal_options.result_callback = std::bind(&PipelineExecutionNode::result_callback, this, _1);
+
+      this->client_ptr_->async_send_goal(goal, send_goal_options);
+      RCLCPP_INFO(this->get_logger(), "New request to estimate pose");
+
+
+    }
+
+    if (_acquiring_buffer){
+      buffor_msgs.push_back(msg_to_track);
+    }    
+
+    auto current_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    // check if the last segmentation request was more than 5 seconds ago
+    if (current_time - _segmentation_last_request_time > 10){
+      _segmentation_requested = true;
+      _segmentation_last_request_time = current_time;
+    }
+
+
   }
 
 
   void result_callback(const rclcpp_action::ClientGoalHandle<pose_estimation_interfaces::action::SegmentUsingSamEstimatePoseUsingFoundation>::WrappedResult & result){
     RCLCPP_INFO(this->get_logger(), "Result received");
     if (result.code == rclcpp_action::ResultCode::SUCCEEDED){
-      RCLCPP_INFO(this->get_logger(), "Segmentation succeeded");
+      RCLCPP_INFO(this->get_logger(), "Segmentation and pose estimation succeeded");
       auto data = result.result;
       _segmentation_maps = data->masks;
       _new_masks_available = true;
@@ -216,7 +237,9 @@ private:
       }
     }
     else{
-      RCLCPP_ERROR(this->get_logger(), "Segmentation failed");
+      RCLCPP_ERROR(this->get_logger(), "Segmentation and pose estimation failed");
+      _new_masks_available = false;
+      _segmentation_started = false;
     }
   }
 
